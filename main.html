@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="apple-mobile-web-app-title" content="CodePen">
+    <title>Neuro Noise (GLSL Shader)</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            background-color: #151912;
+            overflow: hidden;
+        }
+
+        .section {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #FFF6F7;
+            text-align: center;
+            height: 100vh;
+        }
+
+        .section:nth-child(1) {
+            font-size: 20vh;
+        }
+
+        .section:nth-child(2) {
+            font-size: 10vh;
+        }
+
+        .section:nth-child(3) {
+            font-size: 8vh;
+        }
+
+        @media (max-width: 600px) {
+            .section:nth-child(1) {
+                font-size: 25vw;
+            }
+        }
+
+        canvas#neuro {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            pointer-events: none;
+            opacity: .95;
+        }
+
+        a {
+            text-decoration: none;
+            color: inherit;
+        }
+
+        a:hover {
+            color: rgb(160, 160, 255);
+        }
+
+        a:active {
+            color: rgb(160, 255, 255);
+        }
+    </style>
+</head>
+
+<body translate="no">
+    <div class="section">Neural Noise</div>
+    <div class="section">
+        GLSL shader based on <a href="https://x.com/zozuar/" target="_blank">@zozuar</a>
+        <a href="https://x.com/zozuar/status/1625182758745128981/" target="_blank">artwork</a>
+    </div>
+    <canvas id="neuro"></canvas>
+
+    <script type="x-shader/x-fragment" id="vertShader">
+        precision mediump float;
+        varying vec2 vUv;
+        attribute vec2 a_position;
+        void main() {
+            vUv = .5 * (a_position + 1.);
+            gl_Position = vec4(a_position, 0.0, 1.0);
+        }
+    </script>
+
+    <script type="x-shader/x-fragment" id="fragShader">
+        precision mediump float;
+        varying vec2 vUv;
+        uniform float u_time, u_ratio, u_scroll_progress;
+        uniform vec2 u_pointer_position;
+
+        vec2 rotate(vec2 uv, float angle) {
+            return mat2(cos(angle), sin(angle), -sin(angle), cos(angle)) * uv;
+        }
+
+        float neuro_shape(vec2 uv, float t, float p) {
+            vec2 sine_acc = vec2(0.);
+            vec2 res = vec2(0.);
+            float scale = 8.;
+            for (int j = 0; j < 15; j++) {
+                uv = rotate(uv, 1.);
+                sine_acc = rotate(sine_acc, 1.);
+                vec2 layer = uv * scale + float(j) - t + sine_acc;
+                sine_acc += sin(layer);
+                res += (.5 + .5 * cos(layer)) / scale;
+                scale *= (1.2 - .07 * p);
+            }
+            return res.x + res.y;
+        }
+
+        void main() {
+            vec2 uv = .5 * vUv;
+            uv.x *= u_ratio;
+            vec2 pointer = vUv - u_pointer_position;
+            pointer.x *= u_ratio;
+            float p = clamp(length(pointer), 0., 1.);
+            float t = .001 * u_time;
+            float noise = neuro_shape(uv, t, .5 * pow(1. - p, 2.));
+
+            noise = max(0.0, 1.2 * pow(noise, 3.) - .5);
+            vec3 color = vec3(.2, .5 + .4 * cos(3. * u_scroll_progress), .5 + .5 * sin(3. * u_scroll_progress)) * noise;
+            gl_FragColor = vec4(color, noise);
+        }
+    </script>
+
+    <script>
+        const canvasEl = document.querySelector("canvas#neuro");
+        const gl = canvasEl.getContext("webgl") || canvasEl.getContext("experimental-webgl");
+        const devicePixelRatio = Math.min(window.devicePixelRatio, 2);
+
+        if (!gl) alert("WebGL not supported by your browser.");
+
+        const vertexShaderSource = document.getElementById("vertShader").innerHTML;
+        const fragmentShaderSource = document.getElementById("fragShader").innerHTML;
+
+        function createShader(gl, source, type) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            return gl.getShaderParameter(shader, gl.COMPILE_STATUS) ? shader : null;
+        }
+
+        const vertexShader = createShader(gl, vertexShaderSource, gl.VERTEX_SHADER);
+        const fragmentShader = createShader(gl, fragmentShaderSource, gl.FRAGMENT_SHADER);
+
+        const shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+        gl.useProgram(shaderProgram);
+
+        const positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+        const positionLocation = gl.getAttribLocation(shaderProgram, "a_position");
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+        const uniforms = {
+            u_time: gl.getUniformLocation(shaderProgram, "u_time"),
+            u_ratio: gl.getUniformLocation(shaderProgram, "u_ratio"),
+            u_pointer_position: gl.getUniformLocation(shaderProgram, "u_pointer_position"),
+            u_scroll_progress: gl.getUniformLocation(shaderProgram, "u_scroll_progress")
+        };
+
+        const pointer = { x: 0, y: 0, tX: 0, tY: 0 };
+        window.addEventListener("pointermove", e => {
+            pointer.tX = e.clientX;
+            pointer.tY = e.clientY;
+        });
+
+        function render() {
+            pointer.x += (pointer.tX - pointer.x) * .5;
+            pointer.y += (pointer.tY - pointer.y) * .5;
+
+            gl.uniform1f(uniforms.u_time, performance.now());
+            gl.uniform2f(uniforms.u_pointer_position, pointer.x / window.innerWidth, 1 - pointer.y / window.innerHeight);
+            gl.uniform1f(uniforms.u_scroll_progress, window.pageYOffset / (2 * window.innerHeight));
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            requestAnimationFrame(render);
+        }
+
+        function resizeCanvas() {
+            canvasEl.width = window.innerWidth * devicePixelRatio;
+            canvasEl.height = window.innerHeight * devicePixelRatio;
+            gl.uniform1f(uniforms.u_ratio, canvasEl.width / canvasEl.height);
+            gl.viewport(0, 0, canvasEl.width, canvasEl.height);
+        }
+
+        window.addEventListener("resize", resizeCanvas);
+        resizeCanvas();
+        render();
+    </script>
+</body>
+
+</html>
